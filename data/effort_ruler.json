@@ -1,0 +1,17 @@
+{
+  "measured": false,
+  "provenance": "PROVISIONAL. Log-normal with mean=7.3 (Mind2Web published mean, Deng et al. NeurIPS 2023) and assumed sigma=0.55. The mean is real; the spread is a modelling assumption. Replace by running `python -m humanbrowser.ruler build`.",
+  "n_tasks": 2350,
+  "mean_actions": 7.3,
+  "quantiles": {
+    "0.10": 3.1,
+    "0.25": 4.33,
+    "0.50": 6.28,
+    "0.75": 9.09,
+    "0.80": 9.97,
+    "0.90": 12.7,
+    "0.95": 15.51,
+    "0.99": 22.56
+  },
+  "counts": null
+}
