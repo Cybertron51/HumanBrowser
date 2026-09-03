@@ -20,58 +20,6 @@ Known crudeness, all deliberate:
 """
 from __future__ import annotations
 
-# Injected into the page; returns per-element visual features.
-FEATURES_JS = r"""
-(boxes) => {
-  const parse = (s) => {
-    if (!s) return null;
-    const m = s.match(/rgba?\(([^)]+)\)/);
-    if (!m) return null;
-    const p = m[1].split(',').map(x => parseFloat(x));
-    if (p.length > 3 && p[3] === 0) return null;      // fully transparent
-    return [p[0], p[1], p[2]];
-  };
-  const firstGradientStop = (bgImage) => {
-    if (!bgImage || bgImage === 'none') return null;
-    const m = bgImage.match(/rgba?\([^)]+\)/);
-    return m ? parse(m[0]) : null;
-  };
-  const effectiveBg = (el) => {
-    let n = el;
-    while (n && n !== document.documentElement) {
-      const cs = getComputedStyle(n);
-      const c = parse(cs.backgroundColor) || firstGradientStop(cs.backgroundImage);
-      if (c) return c;
-      n = n.parentElement;
-    }
-    return [255, 255, 255];
-  };
-  const lum = ([r, g, b]) => {
-    const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
-    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
-  };
-
-  return boxes.map(({ x, y, w, h }) => {
-    const el = document.elementFromPoint(
-      Math.min(Math.max(x + w / 2, 1), innerWidth - 1),
-      Math.min(Math.max(y + h / 2, 1), innerHeight - 1));
-    if (!el) return { contrast: 1, area: w * h, top: y + scrollY, ok: false };
-    const cs = getComputedStyle(el);
-    const fg = parse(cs.color) || [0, 0, 0];
-    const bg = effectiveBg(el);
-    const l1 = lum(fg), l2 = lum(bg);
-    const contrast = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
-    return {
-      contrast,
-      area: w * h,
-      top: y + scrollY,
-      weight: parseInt(cs.fontWeight) || 400,
-      ok: true,
-    };
-  });
-}
-"""
-
 # Tuning. Deliberately few knobs, all readable.
 CONTRAST_FULL = 7.0        # WCAG AAA — at or above this, contrast stops helping
 AREA_FLOOR = 600.0         # px^2; a small inline link

@@ -49,6 +49,8 @@ class EffortBudget:
     persistence: float = 1.0        # population spread multiplier
     frustration_k: float = FRUSTRATION_K
 
+    unlimited: bool = False         # patience removed, for confound isolation
+
     spent: float = 0.0
     actions: int = 0
     _promise_sum: float = 0.0
@@ -56,7 +58,8 @@ class EffortBudget:
     trace: list[Step] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        self.budget = self.ruler.budget_at(self.quantile) * self.persistence
+        self.budget = (math.inf if self.unlimited
+                       else self.ruler.budget_at(self.quantile) * self.persistence)
 
     @property
     def aspiration(self) -> float:
@@ -101,6 +104,7 @@ class Outcome:
     budget: float
     persistence: float
     last_promise: float
+    reason: str = "found"     # found | quit | capped | dead_end
 
 
 class Population:
@@ -141,14 +145,36 @@ def summarize(outcomes: list[Outcome], ruler: Ruler) -> dict:
     finders = [o for o in outcomes if o.found]
     quitters = [o for o in outcomes if not o.found]
     med = _median([o.actions for o in finders]) if finders else None
+    reasons = {}
+    for o in outcomes:
+        reasons[o.reason] = reasons.get(o.reason, 0) + 1
     return {
         "n": len(outcomes),
         "found_rate": len(finders) / len(outcomes),
         "median_actions_to_find": med,
         "human_percentile_of_median": ruler.percentile_of(med) if med else None,
         "median_actions_before_quitting": _median([o.actions for o in quitters]) if quitters else None,
+        "reasons": reasons,
         "ruler_measured": ruler.measured,
     }
+
+
+def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """95% confidence interval for a proportion (Wilson score).
+
+    Every found rate this project reports is k successes out of n visitors, and
+    n is usually small enough that the interval is wide — at n=20 near 50% it
+    spans about +-22 points. A bare percentage invites reading noise as effect,
+    which is exactly what happened in M-006. Wilson rather than the normal
+    approximation because it stays sane near 0 and 1.
+    """
+    if n == 0:
+        return (0.0, 0.0)
+    p = k / n
+    d = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / d
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
+    return (max(0.0, centre - half), min(1.0, centre + half))
 
 
 def _median(xs):

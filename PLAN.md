@@ -62,12 +62,16 @@ Two properties make the conservatism work in our favour:
 
 | Module | Does | Status |
 |---|---|---|
-| `perceive.py` | Turn a live page into the visitor's observation: interactive elements, bounding boxes, accessibility tree, viewport-scoped, occlusion-tested | **working** |
+| `observe.py` | Turn a live page into the visitor's observation in one JS pass: interactive elements, geometry, contrast, occlusion-tested, document-wide with a depth penalty | **working** |
 | `ruler.py` | Human effort reference distribution and percentile lookups | **working** (ruler provisional — see below) |
 | `budget.py` | Effort budget, frustration-weighted spending, quit rule, population sampling, survival curves | **working** |
-| `attention.py` | Predicted visual attention per element; gates what the policy may consider | to build (M1) |
-| `policy.py` | Choose the next action: scent × visibility | to build (M2) |
-| `report.py` | Session traces → the report above | to build (M2) |
+| `visibility.py` | Predicted noticeability per element; gates what the policy may consider. Crude stand-in for a saliency model | **working** (heuristic — M3 replaces it) |
+| `policy.py` | Choose the next action: scent × visibility | **working** (keyword scent — M4 replaces it) |
+| `run.py` | The loop, the population runner, the three gate channels, and reporting | **working** |
+
+Superseded: `perceive.py` was folded into `observe.py` and deleted; there is no
+separate `attention.py` (that is `visibility.py`) or `report.py` (reporting lives
+in `run.py`). See `DECISIONS.md` D-004 and D-016.
 
 ### How the pieces connect
 
@@ -157,22 +161,31 @@ The hypothesis holds. Limiting the visitor to what they would plausibly notice
 changes what they miss, on day one, with a crude gate. That is the go/no-go and
 it passed — the real saliency model is now worth the two days.
 
-### M2 — population reporting and the second test case
-The population runner and report exist. Two gaps:
+### M2 — population reporting and the second test case ✔ (2026-09-03)
+The population runner and report exist. Status after the 2026-09-03 session:
 
-1. **The vocabulary-gap case does not work yet.** Goal `"I run this same search
-   every week"` against `#trail-alerts` (reachable only via a footer link
-   labelled "Provisioning") gives 50% / 50%, gate off vs on. Reason: keyword
-   overlap is zero for every element, so scores are flat, so softmax is
-   near-uniform and visibility has nothing to modulate. **The gate only does
-   work when there is scent to weight.** This makes M4 a prerequisite for the
-   more interesting product case, not polish.
-2. **Speed.** Flat scent means visitors wander to MAX_STEPS. 30 visitors × 2
-   arms exceeded two minutes. Needs either faster scent convergence or parallel
-   contexts.
+1. **The vocabulary-gap case was diagnosed wrongly, twice.** First it was
+   blamed on flat keyword scent (D-007) — correct, but embeddings did not fix
+   it (M-005). The real cause: "Provisioning" is a *total* vocabulary gap, so
+   there is no gradient at all, and with no gradient the visitor stops foraging
+   and diffuses. On a 15-page site a 40-step walk then saturates and finds the
+   target ~50% of the time regardless, swamping every manipulation (M-006).
 
-**Done when:** both test cases produce a signal, and moving `Provisioning` from
-the footer into the main nav measurably raises the found rate.
+   Replaced by `fixtures/northlake2` (D-022): 77 pages, and a **partial** gap —
+   "Restock alerts" shares no word with the goal but is semantically reachable.
+   On it the gate produces −28% (p<0.001), the first significant gate effect
+   under a Rule 1-clean goal, and moving the link from footer to nav raises the
+   found rate **+10% (p=0.017, n=300, replicated on an independent seed)** while
+   the gate-off control is provably null (M-008, D-024).
+
+2. **Speed.** Partly fixed: `--settle-ms` was most of the wall clock and gives
+   4.5x (D-017). Real parallelism across contexts is still undone, and the
+   per-visitor contexts from D-015 now make it possible.
+
+**Done:** 2026-09-03. Position intervention +10% at p=0.017, replicated; the
+gate-off control is null by construction, verified by measuring the selection
+probabilities rather than by a significance test (D-024). Remaining M2 work is
+speed: parallel contexts, which D-015 now makes possible.
 
 ### M3 — the real attention model
 Replace the contrast/area/depth heuristic with SUM (`--condition 3`, MIT,

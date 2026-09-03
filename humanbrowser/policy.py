@@ -22,43 +22,33 @@ from __future__ import annotations
 
 import math
 import random
-import re
 
-STOPWORDS = {
-    "a", "an", "the", "i", "my", "me", "we", "it", "this", "that", "these",
-    "is", "are", "was", "be", "been", "can", "could", "do", "does", "did",
-    "to", "of", "for", "in", "on", "at", "by", "with", "and", "or", "but",
-    "if", "so", "as", "from", "up", "out", "am", "want", "need", "would",
-    "like", "how", "what", "where", "there", "here", "you", "your", "again",
-}
+from . import scent as scent_models
+from .scent import STOPWORDS, tokens   # re-exported; one owner lives in scent.py
 
 REVISIT_PENALTY = 0.25   # multiplier for something already clicked this session
 FLOOR = 1e-3             # nothing is truly unclickable
 DEFAULT_TEMPERATURE = 0.35
 
 
-def tokens(text: str) -> set[str]:
-    return {w for w in re.findall(r"[a-z0-9]+", (text or "").lower())
-            if w not in STOPWORDS and len(w) > 2}
-
-
 def scent(goal: str, element: dict) -> float:
-    """Word overlap between the goal and the element's visible text. [0,1]."""
-    g = tokens(goal)
-    if not g:
-        return 0.0
-    e = tokens(" ".join(filter(None, [element.get("name"), element.get("href")])))
-    if not e:
-        return 0.0
-    return len(g & e) / len(g)
+    """Keyword scent for one element. [0,1]. Kept for callers wanting one score."""
+    return scent_models.DEFAULT.score(goal, [element])[0]
 
 
 def score_elements(elements: list[dict], goal: str, *, gate: bool,
-                   visited: set[str] | None = None) -> list[float]:
+                   visited: set[str] | None = None,
+                   scent_model=None) -> list[float]:
+    """score = scent x visibility, floored, penalised for revisits.
+
+    `scent_model` is batched because embedding scent wants to encode a whole
+    page in one call; the keyword model ignores the distinction.
+    """
     visited = visited or set()
+    model = scent_model or scent_models.DEFAULT
+    scents = model.score(goal, elements)
     out = []
-    for el in elements:
-        s = scent(goal, el)
+    for el, s in zip(elements, scents):
         v = el.get("visibility", 1.0) if gate else 1.0
         x = max(FLOOR, s * v if gate else max(s, FLOOR))
         if _key(el) in visited:
@@ -69,11 +59,13 @@ def score_elements(elements: list[dict], goal: str, *, gate: bool,
 
 def choose(elements: list[dict], goal: str, *, gate: bool, rng: random.Random,
            visited: set[str] | None = None,
-           temperature: float = DEFAULT_TEMPERATURE):
+           temperature: float = DEFAULT_TEMPERATURE,
+           scent_model=None):
     """Pick an element by softmax over score. Returns (element, promise, scores)."""
     if not elements:
         return None, 0.0, []
-    scores = score_elements(elements, goal, gate=gate, visited=visited)
+    scores = score_elements(elements, goal, gate=gate, visited=visited,
+                            scent_model=scent_model)
     m = max(scores)
     exps = [math.exp((s - m) / max(temperature, 1e-6)) for s in scores]
     total = sum(exps)

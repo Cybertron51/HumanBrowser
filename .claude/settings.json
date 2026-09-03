@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'cd \"${CLAUDE_PROJECT_DIR:-.}\" && ./.claude/hooks/decisions-guard.sh'",
+            "timeout": 10,
+            "statusMessage": "Checking DECISIONS.md"
+          }
+        ]
+      }
+    ]
+  }
+}
