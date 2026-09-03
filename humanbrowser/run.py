@@ -1,10 +1,10 @@
 """
 The loop. One visitor, or a population of them.
 
-    python3 -m humanbrowser.run http://localhost:8000/ \
-        --goal "I run this same search every week, can I keep it" \
-        --target "#trail-alerts button" \
-        --n 25 --gate
+    python3 -m humanbrowser.run http://localhost:8002/index.html \
+        --goal "is there a way to be notified when an item I want is available again" \
+        --target "#restock-signup" \
+        --n 100 --gate --scent embedding
 
 Add --compare to run it twice, gate off and gate on, and print the difference.
 That comparison is the day-one hypothesis test: does limiting the visitor to
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import statistics
 from dataclasses import dataclass, field
@@ -34,6 +35,9 @@ MAX_STEPS = 40
 # JS-heavy sites that render after domcontentloaded, and near-pointless for a
 # static fixture — see D-017.
 SETTLE_MS = 200
+
+# Population spread of patience; matches budget.Population.personas.
+SPREAD = 0.35
 
 
 @dataclass(frozen=True)
@@ -85,14 +89,23 @@ def _perceptible(feat: dict) -> bool:
     return visibility.score(feat, VIEWPORT["height"]) >= visibility.DEFAULT_THRESHOLD
 
 
-def _visible_target(page, target: str, gate: bool) -> bool:
+_UNFETCHED = object()
+
+
+def _visible_target(page, target: str, gate: bool, feat=_UNFETCHED) -> bool:
     """Present, on screen, and — if gating — actually perceptible.
 
     Features come from TARGET_JS, the same maths OBSERVE_JS uses on every other
     element. This previously reported a hardcoded contrast, which meant the
     detection channel silently reduced to area x depth (D-009).
+
+    `visit()` has already fetched `feat` for the Rule 1 check, so it passes it
+    in rather than paying for a second round trip. It must go through this
+    function and not reimplement it: the browser tests assert on this code, and
+    a second copy of the logic is exactly how D-009 happened.
     """
-    feat = eval_stable(page, TARGET_JS, target)
+    if feat is _UNFETCHED:
+        feat = eval_stable(page, TARGET_JS, target)
     if feat is None:
         return False
     return True if not gate else _perceptible(feat)
@@ -121,15 +134,14 @@ def visit(page, start_url: str, goal: str, target: str, budget: EffortBudget,
             trace.unnoticed.add(e["name"] or e.get("href") or "?")
 
         feat = eval_stable(page, TARGET_JS, target)
-        if feat is not None:
+        if feat is not None and check_goal:
             # Rule 1, against the target's real label. Only knowable once the
             # visitor has reached it, so it aborts the run rather than warning.
-            if check_goal:
-                goals.check(goal, feat.get("name", ""),
-                            where="the target's accessible name")
-            if not gate.detect or _perceptible(feat):
-                trace.exit_url = page.url
-                return True, last, trace, "found"
+            goals.check(goal, feat.get("name", ""),
+                        where="the target's accessible name")
+        if _visible_target(page, target, gate.detect, feat=feat):
+            trace.exit_url = page.url
+            return True, last, trace, "found"
 
         el, _, _ = policy.choose(els, goal, gate=gate.choose, rng=rng, visited=visited,
                                  scent_model=scent_model)
@@ -196,7 +208,7 @@ def _run_on(browser, start_url, goal, target, *, n, gate, quantile, ruler, seed,
     rng_master = random.Random(seed)
     outcomes, traces = [], []
     for _ in range(n):
-        persist = 2.718 ** rng_master.gauss(-0.35 * 0.35 / 2, 0.35)
+        persist = math.exp(rng_master.gauss(-SPREAD * SPREAD / 2, SPREAD))
         b = EffortBudget(ruler, quantile, persistence=persist, unlimited=unlimited)
         # A fresh context per visitor: cookies and localStorage must not carry
         # over, or visitor 30 is no longer a first-time visitor.
@@ -233,11 +245,11 @@ def report(outcomes, traces, ruler, gate: Gate, scent_model=None) -> str:
     if fails:
         lines.append("  failed because       " + ", ".join(
             f"{k} {v}" for k, v in sorted(fails.items(), key=lambda kv: -kv[1])))
-    if s["median_actions_to_find"]:
+    if s["median_actions_to_find"] is not None:
         pct = s["human_percentile_of_median"]
         lines.append(f"  median cost to find  {s['median_actions_to_find']:.0f} actions"
                      f"  ->  {pct:.0%} percentile of human task effort")
-    if s["median_actions_before_quitting"]:
+    if s["median_actions_before_quitting"] is not None:
         lines.append(f"  quit before finding  {1-s['found_rate']:.0%}, "
                      f"median {s['median_actions_before_quitting']:.0f} actions in")
         lines.append(f"  most common exit     {top_exit}")
@@ -278,7 +290,10 @@ def decompose(a, ruler):
                 outs, trs = run_population(a.url, a.goal, a.target, n=a.n, gate=g,
                                            quantile=a.quantile, ruler=ruler,
                                            seed=a.seed, unlimited=unlimited,
-                                           max_steps=a.max_steps, browser=browser)
+                                           max_steps=a.max_steps, settle_ms=a.settle_ms,
+                                           scent_model=a.scent_model,
+                                           check_goal=not a.allow_goal_leak,
+                                           browser=browser)
                 s = summarize(outs, ruler)
                 rows.append((name, s["found_rate"], s["reasons"]))
                 errors += sum(t.click_errors for t in trs)
@@ -312,13 +327,13 @@ def decompose(a, ruler):
     print(f"\n  gate damage {full - base:+.0%} splits into:")
     print(f"    perception     {perception:+.0%}  gated vs ungated, patience off in both arms")
     print(f"    patience       {amplified:+.0%}  the rest: found it eventually, gave up first")
-    nq_reasons = {k: nq_reasons.get(k, 0) + off_reasons.get(k, 0)
-                  for k in set(nq_reasons) | set(off_reasons)}
-    if nq_reasons.get("capped"):
+
+    capped = nq_reasons.get("capped", 0) + off_reasons.get("capped", 0)
+    if capped:
         # This split moved from -33/-20 to -7/-46 purely by raising the cap from
         # 40 to 120 on identical inputs (M-003). While anyone is still capped,
         # the numbers above are bounds, not measurements.
-        print(f"\n    !! {nq_reasons['capped']}/{a.n} unlimited-patience visitors hit "
+        print(f"\n    !! {capped}/{2 * a.n} unlimited-patience visitors (both arms) hit "
               f"--max-steps={a.max_steps}.")
         print("       DO NOT QUOTE THIS SPLIT. It is highly sensitive to the cap while")
         print("       anyone is still hitting it. Raise --max-steps until capped is 0.")
@@ -386,6 +401,8 @@ def main():
     else:
         gate = Gate.all_on() if a.gate else Gate()
 
+    if a.compare and (a.channels or a.gate):
+        ap.error("--compare runs gate off vs all channels on; drop --gate/--channels")
     modes = [Gate(), Gate.all_on()] if a.compare else [gate]
     results = {}
     for g in modes:

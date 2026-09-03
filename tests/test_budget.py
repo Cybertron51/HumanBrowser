@@ -209,3 +209,36 @@ def test_summarize_reasons_partition_the_population(ruler):
     s = summarize(outs, ruler)
     assert sum(s["reasons"].values()) == s["n"]
     assert s["reasons"]["found"] == sum(o.found for o in outs)
+
+
+def test_population_records_why_each_visitor_stopped():
+    """Outcome.reason defaults to "found"; Population must override it or every
+    quitter is reported as a success and contradicts found_rate."""
+    from humanbrowser.budget import Population
+    from humanbrowser.ruler import provisional
+    r = provisional()
+
+    def gives_up(b):
+        while b.spend(0.0):
+            pass
+        return False, 0.0
+
+    outs = Population(r, n=6).run(gives_up)
+    assert all(o.found is False for o in outs)
+    assert {o.reason for o in outs} == {"quit"}
+
+
+def test_population_marks_finders_found():
+    from humanbrowser.budget import Population
+    from humanbrowser.ruler import provisional
+    outs = Population(provisional(), n=4).run(lambda b: (True, 0.5))
+    assert {o.reason for o in outs} == {"found"}
+
+
+def test_a_zero_action_find_still_reports_a_median(ruler):
+    """A target on the landing page costs 0 actions. `if med else None` treated
+    that as missing data and the report line vanished for the easiest site."""
+    outs = [Outcome(True, 0, 0.0, 9.0, 1.0, 1.0, "found") for _ in range(3)]
+    s = summarize(outs, ruler)
+    assert s["median_actions_to_find"] == 0.0
+    assert s["human_percentile_of_median"] is not None

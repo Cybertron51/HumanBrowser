@@ -122,12 +122,17 @@ class Population:
             yield math.exp(self.rng.gauss(mu, self.spread))
 
     def run(self, session) -> list[Outcome]:
-        """`session(budget) -> (found: bool, last_promise: float)`"""
+        """`session(budget) -> (found: bool, last_promise: float)`
+
+        The reason is derived from the budget rather than defaulted, or every
+        outcome would be labelled "found" and contradict `found_rate`.
+        """
         out = []
         for p in self.personas():
             b = EffortBudget(self.ruler, self.quantile, persistence=p)
             found, last = session(b)
-            out.append(Outcome(found, b.actions, b.spent, b.budget, p, last))
+            reason = "found" if found else ("quit" if b.exhausted else "capped")
+            out.append(Outcome(found, b.actions, b.spent, b.budget, p, last, reason))
         return out
 
 
@@ -152,7 +157,8 @@ def summarize(outcomes: list[Outcome], ruler: Ruler) -> dict:
         "n": len(outcomes),
         "found_rate": len(finders) / len(outcomes),
         "median_actions_to_find": med,
-        "human_percentile_of_median": ruler.percentile_of(med) if med else None,
+        "human_percentile_of_median": (ruler.percentile_of(med)
+                                      if med is not None else None),
         "median_actions_before_quitting": _median([o.actions for o in quitters]) if quitters else None,
         "reasons": reasons,
         "ruler_measured": ruler.measured,

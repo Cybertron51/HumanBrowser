@@ -59,6 +59,13 @@ OBSERVE_JS = r"""
   const SEL = 'a[href],button,input,select,textarea,[role=button],[role=link],[role=tab],[onclick]';
   const vw = innerWidth, vh = innerHeight;
 """ + FEATURE_HELPERS_JS + r"""
+  // Clear handles from a previous observation of this same document. Elements
+  // stamped last time but filtered out this time (now hidden, occluded by a
+  // modal, collapsed) would otherwise keep a stale data-hb, and a click on
+  // [data-hb="3"] takes the FIRST match in DOM order — usually the stale one.
+  // That is the wrong-element ambiguity the handle exists to remove.
+  for (const e of document.querySelectorAll('[data-hb]')) e.removeAttribute('data-hb');
+
   const out = [];
   for (const el of document.querySelectorAll(SEL)) {
     const r = el.getBoundingClientRect();

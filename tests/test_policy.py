@@ -151,3 +151,17 @@ def test_unnoticed_reports_below_threshold_elements():
     els[0]["visibility"] = 0.9
     els[1]["visibility"] = 0.01
     assert [e["name"] for e in policy.unnoticed(els, 0.22)] == ["Quiet"]
+
+
+def test_persistence_sampling_matches_the_population_model():
+    """run._run_on and budget.Population.personas must draw from one
+    distribution; run.py used a truncated `2.718 **` literal."""
+    import math, random
+    from humanbrowser.run import SPREAD
+    from humanbrowser.budget import Population
+    from humanbrowser.ruler import provisional
+
+    a = random.Random(5)
+    mine = [math.exp(a.gauss(-SPREAD * SPREAD / 2, SPREAD)) for _ in range(8)]
+    pop = Population(provisional(), n=8, spread=SPREAD, seed=5)
+    assert mine == pytest.approx(list(pop.personas()))

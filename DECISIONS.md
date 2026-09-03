@@ -356,6 +356,54 @@ it proves — read D-008 and D-009 before quoting this number.
 
 ## Decisions
 
+### D-025 — Nine defects from the first code review of this work
+**Date:** 2026-09-03 · **Status:** active
+All fixed, with regression tests where a test could have caught them. Recorded
+because two are instances of failure modes already in this log, which means the
+lessons had not actually been learned.
+
+**The worst one: `--decompose` silently ignored `--scent`.** The decompose path
+never forwarded `scent_model`, `check_goal` or `settle_ms`, so any future
+`--decompose --scent embedding` would have run the *keyword* model and printed a
+table with nothing indicating it. The entire M4 channel decomposition would have
+been computed with the model M4 exists to replace.
+
+*Why it survived:* an earlier `str.replace()` patch did not match and made no
+change; I "verified" it with a grep that returned **one** of the two expected
+call sites and did not notice the second was missing. A silent no-op edit plus a
+grep that cannot distinguish "one hit" from "one of two hits". Verify a patch by
+its effect, not by a substring appearing somewhere in the file.
+
+**A recurrence of D-009's exact pattern.** `_visible_target` had become dead in
+production — `visit()` inlined the same logic — while `tests/test_browser.py`
+still asserted on it. So the browser tests written specifically to catch
+contrast drift were testing a *copy* of the shipped path. `visit()` now calls
+`_visible_target`, passing the already-fetched features so there is no second
+round trip. **Two copies of a rule is how D-009 happened, and it happened again
+inside the fix for it.**
+
+The rest:
+
+- Stale `data-hb` handles were never cleared, so an element stamped on one
+  observation but filtered out on the next kept its attribute; a click on
+  `[data-hb="3"]` takes the first DOM match, usually the stale one. Latent on
+  static fixtures, live the moment a modal or dropdown appears.
+- The capped-visitor warning summed both no-quit arms and divided by `n`, so it
+  could print "50/25 visitors hit the cap" — on the very line that tells a
+  reader whether to trust the perception/patience split.
+- `if med else None` treated a median of **0** actions as missing data, so the
+  "median cost to find" line vanished for the easiest possible site (target on
+  the landing page). Truthiness where `is not None` was meant.
+- `Population.run` never set `Outcome.reason`, so every outcome took the
+  `"found"` default and quitters would be reported as successes.
+- `run.py`'s module docstring example aborts under Rule 1 — `#trail-alerts
+  button` resolves to a button labelled "Save this search", which collides with
+  the goal's "search".
+- `--compare` silently discarded `--channels`/`--gate`; now an explicit error.
+- Persistence was sampled with a truncated `2.718 **` literal in `run.py` and
+  `math.exp` in `budget.py`, two generators for one population. Now one `SPREAD`
+  constant, with a test asserting they agree.
+
 ### D-024 — Check the mechanism before reaching for a p-value
 **Date:** 2026-09-03 · **Status:** active
 When an arm *should* be null by construction, verify that by measuring the
