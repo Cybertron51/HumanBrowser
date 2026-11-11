@@ -13,6 +13,7 @@ what they would plausibly notice change what they miss?
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import random
@@ -85,6 +86,32 @@ class Trace:
     click_errors: int = 0     # clicks the harness could not perform: our fault, not the visitor's
 
 
+def missed_lead(els: list[dict], goal: str, chosen: dict, scent_model=None):
+    """(element, scent) of the strongest lead by raw scent, if the visitor would
+    not have noticed it and did not click it; else None.
+
+    The one copy of this rule: the trace and the recorder both call it
+    (D-027). Pure: no randomness, no page access.
+    """
+    if not els:
+        return None
+    scents = (scent_model or scent_models.DEFAULT).score(goal, els)
+    i = max(range(len(els)), key=scents.__getitem__)
+    lead = els[i]
+    if lead is chosen or lead.get("visibility", 1.0) >= visibility.DEFAULT_THRESHOLD:
+        return None
+    return lead, scents[i]
+
+
+def observation_digest(els: list[dict]) -> str:
+    """Short hash of every element's (name, href, visibility) on the page. Lets
+    the replay prove it saw the same page, not just the same best link (D-029)."""
+    # Visibility to 2 decimals: the same page re-laid out differs in the 4th
+    # place (0.4038 vs 0.4037 seen on tents.html), which must not read as change.
+    rows = [(e.get("name"), e.get("href"), round(e.get("visibility", 1.0), 2)) for e in els]
+    return hashlib.sha1(json.dumps(rows).encode()).hexdigest()[:12]
+
+
 def _perceptible(feat: dict) -> bool:
     return visibility.score(feat, VIEWPORT["height"]) >= visibility.DEFAULT_THRESHOLD
 
@@ -116,8 +143,15 @@ def visit(page, start_url: str, goal: str, target: str, budget: EffortBudget,
           max_steps: int = MAX_STEPS,
           settle_ms: int = SETTLE_MS,
           scent_model=None,
-          check_goal: bool = True) -> tuple[bool, float, Trace, str]:
+          check_goal: bool = True,
+          on_step=None) -> tuple[bool, float, Trace, str]:
     """Returns (found, last_promise, trace, reason).
+
+    `on_step(page, elements, chosen, budget, decision)` is called once per
+    action, after the choice is made and paid for and before the click.
+    `decision` has the choice scores, the softmax probabilities and which
+    elements were revisits. It exists for the recorder and must leave the page
+    as it found it (D-029).
 
     `reason` distinguishes the three ways a visitor can fail, which a bare
     found=False cannot: ran out of patience, hit the step cap, or found nothing
@@ -143,7 +177,7 @@ def visit(page, start_url: str, goal: str, target: str, budget: EffortBudget,
             trace.exit_url = page.url
             return True, last, trace, "found"
 
-        el, _, _ = policy.choose(els, goal, gate=gate.choose, rng=rng, visited=visited,
+        el, _, scores = policy.choose(els, goal, gate=gate.choose, rng=rng, visited=visited,
                                  scent_model=scent_model)
         if el is None:
             trace.exit_url = page.url
@@ -153,11 +187,25 @@ def visit(page, start_url: str, goal: str, target: str, budget: EffortBudget,
         promise = max(policy.score_elements(els, goal, gate=gate.cost, visited=visited,
                                             scent_model=scent_model))
         last = promise
+        # Only when the choice channel is on: with it off the visitor did weigh
+        # a dim link at full visibility, so calling it missed would be false.
+        ml = missed_lead(els, goal, el, scent_model) if gate.choose else None
         trace.steps.append({
-            "url": page.url, "clicked": el["name"], "promise": round(promise, 3),
-            "visibility": el.get("visibility"), "spent": round(budget.spent, 2),
+            "url": page.url, "clicked": el["name"], "href": el.get("href"), "promise": round(promise, 3),
+            "visibility": el.get("visibility"), "spent_before": round(budget.spent, 2),
+            "digest": observation_digest(els),
+            "missed": None if ml is None else {
+                "name": ml[0]["name"], "href": ml[0].get("href"),
+                "scent": round(ml[1], 3), "visibility": ml[0].get("visibility")},
         })
-        if not budget.spend(promise):
+        alive = budget.spend(promise)
+        if on_step is not None:
+            on_step(page, els, el, budget, {
+                "scores": scores, "probs": policy.choice_probabilities(scores),
+                "ungated_scores": policy.score_elements(
+                    els, goal, gate=False, visited=visited, scent_model=scent_model),
+                "revisit": [policy._key(e) in visited for e in els]})
+        if not alive:
             trace.exit_url = page.url
             return False, promise, trace, "quit"
 
@@ -203,19 +251,29 @@ def run_population(start_url: str, goal: str, target: str, *, n: int, gate: Gate
             b.close()
 
 
-def _run_on(browser, start_url, goal, target, *, n, gate, quantile, ruler, seed,
-            unlimited, max_steps, settle_ms, scent_model=None, check_goal=True):
+def personas(seed: int, n: int):
+    """(persistence, visitor seed) for each visitor, in population order.
+
+    One generator for the population run and for the recorder's replay, so
+    visitor i is the same visitor in both.
+    """
     rng_master = random.Random(seed)
-    outcomes, traces = [], []
     for _ in range(n):
         persist = math.exp(rng_master.gauss(-SPREAD * SPREAD / 2, SPREAD))
+        yield persist, rng_master.random()
+
+
+def _run_on(browser, start_url, goal, target, *, n, gate, quantile, ruler, seed,
+            unlimited, max_steps, settle_ms, scent_model=None, check_goal=True):
+    outcomes, traces = [], []
+    for persist, visitor_seed in personas(seed, n):
         b = EffortBudget(ruler, quantile, persistence=persist, unlimited=unlimited)
         # A fresh context per visitor: cookies and localStorage must not carry
         # over, or visitor 30 is no longer a first-time visitor.
         ctx = browser.new_context(viewport=VIEWPORT)
         try:
             found, last, tr, reason = visit(ctx.new_page(), start_url, goal, target, b,
-                                            gate=gate, rng=random.Random(rng_master.random()),
+                                            gate=gate, rng=random.Random(visitor_seed),
                                             max_steps=max_steps, settle_ms=settle_ms,
                                             scent_model=scent_model, check_goal=check_goal)
         finally:
@@ -223,6 +281,21 @@ def _run_on(browser, start_url, goal, target, *, n, gate, quantile, ruler, seed,
         outcomes.append(Outcome(found, b.actions, b.spent, b.budget, persist, last, reason))
         traces.append(tr)
     return outcomes, traces
+
+
+def missed_leads(outcomes, traces) -> list[tuple[str, str, int, int]]:
+    """(label, page, visitors who found it anyway, visitors who did not), most
+    missed first. A visitor counts once per (label, page) however often they
+    missed it there."""
+    seen: dict[tuple[str, str], dict[int, bool]] = {}
+    for i, (o, t) in enumerate(zip(outcomes, traces)):
+        for st in t.steps:
+            m = st.get("missed")
+            if m:
+                seen.setdefault((m["name"] or m["href"] or "?", st["url"]), {})[i] = o.found
+    rows = [(lab, url, sum(v.values()), sum(not f for f in v.values()))
+            for (lab, url), v in seen.items()]
+    return sorted(rows, key=lambda r: (-(r[2] + r[3]), r[0], r[1]))
 
 
 def report(outcomes, traces, ruler, gate: Gate, scent_model=None) -> str:
@@ -252,7 +325,11 @@ def report(outcomes, traces, ruler, gate: Gate, scent_model=None) -> str:
     if s["median_actions_before_quitting"] is not None:
         lines.append(f"  quit before finding  {1-s['found_rate']:.0%}, "
                      f"median {s['median_actions_before_quitting']:.0f} actions in")
-        lines.append(f"  most common exit     {top_exit}")
+        lines.append(f"  most common exit     {top_exit}  "
+                     "(where patience ran out, not where the lead was missed)")
+    for lab, url, f, nf in missed_leads(outcomes, traces)[:3]:
+        lines.append(f"  missed lead          {lab!r} on {url}: missed by {f + nf}/{len(traces)}"
+                     f" visitors (found anyway {f}, not found {nf})")
     if never:
         worst = sorted(never.items(), key=lambda kv: -kv[1])[:3]
         for name, c in worst:
@@ -370,6 +447,11 @@ def main():
                     help="isolate each gate channel's contribution")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--trace", action="store_true", help="print the first visitor's steps")
+    ap.add_argument("--record", metavar="DIR", default="",
+                    help="replay representative visitors and save a step-by-step capture "
+                         "of each, plus every visitor's trace, then build the viewer")
+    ap.add_argument("--record-exits", type=int, default=3,
+                    help="how many of the most common stuck pages to record")
     a = ap.parse_args()
 
     ruler = Ruler.load()
@@ -389,6 +471,14 @@ def main():
         print("\n  !! --allow-goal-leak: the goal may quote the target's own label.")
         print("     Any number below measures string matching, not discoverability.")
 
+    if a.record and (a.compare or a.decompose):
+        ap.error("--record replays one population; drop --compare/--decompose")
+    if a.record:
+        from . import record
+        try:
+            record.check_record_dir(a.record)
+        except record.RecordDirError as e:
+            ap.error(str(e))
     if a.decompose:
         return decompose(a, ruler)
 
@@ -405,20 +495,27 @@ def main():
         ap.error("--compare runs gate off vs all channels on; drop --gate/--channels")
     modes = [Gate(), Gate.all_on()] if a.compare else [gate]
     results = {}
+    run_kw = dict(n=a.n, quantile=a.quantile, ruler=ruler, seed=a.seed,
+                  unlimited=a.no_quit, max_steps=a.max_steps, settle_ms=a.settle_ms,
+                  scent_model=a.scent_model, check_goal=not a.allow_goal_leak)
     for g in modes:
-        outs, trs = run_population(a.url, a.goal, a.target, n=a.n, gate=g,
-                                   quantile=a.quantile, ruler=ruler, seed=a.seed,
-                                   unlimited=a.no_quit, max_steps=a.max_steps,
-                                   settle_ms=a.settle_ms, scent_model=a.scent_model,
-                                   check_goal=not a.allow_goal_leak)
+        outs, trs = run_population(a.url, a.goal, a.target, gate=g, **run_kw)
         results[g.label] = outs
         print(f"\nGOAL   {a.goal!r}\nTARGET {a.target}")
         print(report(outs, trs, ruler, g, a.scent_model))
         if a.trace:
             print("\n  first visitor:")
             for st in trs[0].steps:
-                print(f"    {st['spent']:>5}  vis={st['visibility']}  "
+                print(f"    {st['spent_before']:>5}  vis={st['visibility']}  "
                       f"promise={st['promise']}  clicked {st['clicked']!r}")
+        if a.record:
+            from . import record
+            print(f"\n  recording to {a.record}/")
+            for line in record.record_population(a.url, a.goal, a.target, outs, trs,
+                                                 gate=g, out_dir=a.record,
+                                                 exits=a.record_exits,
+                                                 **run_kw):
+                print(f"    {line}")
 
     if a.compare:
         off = sum(o.found for o in results["none"]) / a.n

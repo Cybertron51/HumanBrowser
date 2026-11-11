@@ -24,6 +24,83 @@ or measure something. An entry that saves one re-run has paid for itself.
 Numbers we have actually observed. Do not re-derive these; re-run only if the
 code they depend on has changed, and then supersede the entry.
 
+### M-010 — On the footer fixture's home page the click distribution is nearly flat; the gate halves the lead link's odds
+**Date:** 2026-11-10 · **Status:** active
+`fixtures/northlake2/footer` `index.html`, embedding scent, temperature 0.35,
+23 links, step 1 of visitor 22 (n=40, seed 11), goal "is there a way to be
+notified when an item I want is available again". Click probability per link,
+from `policy.choice_probabilities`, gate on vs the choice channel off
+(`p` and `p_ungated` in `replay.json`):
+
+| | gate on | choice channel off |
+|---|---|---|
+| max / min across links | **1.26x** | **3.23x** |
+| max p / min p | 0.0511 / 0.0405 | 0.1035 / 0.0320 |
+| 'Restock alerts' (the target's route) | **0.0511**, rank 1 | **0.1035**, rank 1 |
+| uniform for reference | 0.043 | 0.043 |
+
+'Restock alerts' has the highest raw scent on the page (0.412 vs 0.226 for the
+next, 'Sale') and visibility 0.2, so its gated score is 0.082. The gate cut its
+chance of being clicked by a factor of 2.0 (0.1035 to 0.0511). It did not hide
+it: it is still the single most likely click.
+
+**What this means for "missed by 39/40".** That figure counts visitors for whom
+the strongest lead, below the noticeability threshold, was not the link clicked
+on some step. It does not mean the link went unseen, and it is mostly not the
+gate's doing. Even with the gate off the best link is clicked on only about 10%
+of steps, so a lead is "missed" on most steps whatever the gate does. The gate's
+contribution is the factor of 2 on this link; the rest is a flat softmax. Read
+the missed-lead lines as "where the strongest lead was not taken", and quote
+p / p_ungated next to them to say how much was the gate.
+
+**Relation to earlier numbers.** This is M-005's first failure again, now seen
+on the case that does have the right ranking: the spread of cosine scent is too
+small for T=0.35, so the choice is near-uniform (1.26x gated, against M-005's
+1.76x). It does not contradict M-008. A factor of 2 on one link's odds, compounded
+over the steps where it is on the page, is consistent with a real +10 point
+position effect, and a flat distribution is also why that effect is modest
+rather than large. Nothing was changed: the temperature and the threshold are as
+before. Whether T should be lowered is the open question in M-005; this
+measurement says the ranking here is right, so sharpening would not point the
+visitor at the wrong link on this page, unlike M-005's.
+
+One page, one visitor's step 1 (the page's scores do not depend on the visitor
+except through revisits, none at step 1). Not measured: other pages or fixtures.
+
+### M-009 — Mind2Web train measured: n=1,009, mean 7.71, the log-normal guess was close
+**Date:** 2026-11-10 · **Status:** active. Dry run only; `data/effort_ruler.json`
+is unchanged and the ruler is still PROVISIONAL until the swap is approved.
+
+`ruler.build("train")` against `osunlp/Mind2Web` (HF revision `17ece8eb`,
+CC BY 4.0, not gated), saved to a scratch file rather than the repo.
+`datasets` 4.5.0 (pyarrow 21.0.0) in `.venv`. Download 5.5 GB of JSON plus a
+5.1 GB Arrow cache under `~/.cache/huggingface/`; about 15 minutes.
+
+| | n | mean | p50 | p75 | p90 | p95 |
+|---|---|---|---|---|---|---|
+| measured, train | 1,009 | 7.71 | 6 | 10 | 14 | 17 |
+| provisional (σ=0.55) | — | 7.30 | 6.28 | 9.09 | 12.70 | 15.51 |
+
+Range 2–37 actions; 7,775 actions in all (CLICK 6,513, TYPE 936, SELECT 326).
+`len(action_reprs) == len(actions)` for every task, no empty sequences.
+
+**What it means.** The assumed spread was slightly too narrow: the measured
+tail is about 10% heavier from p75 up, so the quit budgets at the default 0.90
+quantile rise from 12.7 to 14 actions. Visitors become a little more patient
+and found rates should move up a little, not change in kind.
+
+**Three things the swap must account for:**
+
+1. **n is 1,009, not 2,350.** The other 1,341 tasks are the three test splits,
+   shipped as a password-protected `test.zip`. They were not fetched. PLAN.md
+   and `provisional()` both cite 2,350; the measured ruler covers the train
+   split only, 73 of the 137 websites.
+2. **12% of human actions are TYPE or SELECT**, which our visitor never does.
+   The ruler counts them as effort, and that is right — a human paid for them —
+   but our visitor's click count is not strictly the same unit.
+3. **The `build` CLI always writes `data/effort_ruler.json`**; there is no
+   output flag. The dry run called `build()` and `save(path)` directly.
+
 ### M-008 — The position intervention is real: +10%, p=0.017, replicated
 **Date:** 2026-09-03 · **Status:** active. **M2's acceptance criterion is met.**
 `fixtures/northlake2`, embedding scent, gate on, n=300/cell, seed 11 — an
@@ -355,6 +432,255 @@ it proves — read D-008 and D-009 before quoting this number.
 ---
 
 ## Decisions
+
+### D-030 — The viewer is a step player over clean screenshots; marks come from the JSON
+**Date:** 2026-11-10 · **Status:** active
+The user decided on an in-house player instead of video. `viewer.build(DIR)` (also
+`python -m humanbrowser.viewer DIR`, also called at the end of `--record`)
+writes `DIR/index.html` from `run.json`, `traces.json` and
+`replays/visitor-NNN/replay.json` (the D-029 contract). The `.webm` cards are gone.
+
+**Layout: timeline | screenshot | detail.** The timeline has one row per step
+(clicked label, patience left, a dot when a lead was missed), ending in the
+outcome with action count and percentile. The centre shows the full-page
+screenshot scaled to width, with the fold at `run.json` viewport height. The
+viewer draws the clicked link (blue), the missed lead (red dashed, labelled),
+other links below the noticeability threshold (grey dashed), and on the last frame the target box
+(green). The detail panel lists every candidate ranked by p (scent, visibility,
+score, p), with the clicked and missed ones marked; clicking a row outlines it.
+Prev/next/play (1.6 s per step), ←/→/space, and a "map" link on each row
+selects that page on the flow map.
+
+**Marks are positioned in percent of the page's document size**, so they stay
+aligned at any scale with no JS resize logic. `end` carries no page size in the
+contract, so the last frame waits for the image and uses its natural size.
+
+**Data is embedded as JSON** in a `<script type="application/json">` with `<`,
+`>` and `&` escaped as `\uXXXX`, so the page opens from `file://` without
+fetch. The page's JS sets data only as text (`append`/`textContent`), never as
+markup. Screenshot paths are rebuilt relative to DIR and dropped if absolute,
+if they contain `..`, or if they contain `:` `\` `?` `#`. So a replay.json
+cannot point the page at another origin or file.
+
+**Missed leads are grouped by label** (case- and whitespace-folded), expandable
+by page. Visitors are counted once per group and once per page, and every count
+goes through one function that prints it with its found-anyway / not-found split.
+On the D-029 sample: *Restock alerts*, missed by 39 of 40, of whom 22 found it
+anyway and 17 did not, across 7 pages. Missed is not failed.
+
+**Map collapse:** a column with more than 9 pages shows its 8 busiest, and the
+rest fold into "+k more" (expandable, edges rerouted to it). The start page and
+target pages never fold. Layout (column, row) stays in Python. Pixel placement
+moved to JS because expanding a column has to re-place it.
+
+**PROVISIONAL rule:** a percentile is untagged only if `run.json` says
+`ruler.measured` **and** the ruler loaded at view time is measured. The run's
+ruler counts are not in run.json, so the number shown always comes from the
+current ruler. Without run.json, the current ruler's flag decides.
+
+**"Not noticed" was the wrong label, so it is gone.** The first build said
+"not noticed". The real capture showed why that is wrong: on step 1 *Restock
+alerts* (visibility 0.20) has the highest click probability of the 23
+candidates (5.1%, also in D-029). The gate is soft (D-003): a link below the
+threshold is down-weighted, never excluded, and on this fixture probabilities
+are nearly flat (0.051 top, 0.041 bottom). "Not noticed" tells the reader the
+visitor could not have clicked it, which the model does not say. The label is
+now "below the noticeability threshold" everywhere: the legend, the mark
+("strongest lead, below the noticeability threshold: …") and the tooltips. The
+detail panel adds that such links are less likely to be clicked, not
+impossible. "Missed lead" stays as the concept's name. A test asserts the page
+never says "not noticed".
+
+**Follow-ups in the same pass.** When a candidate carries `p_ungated` (the
+probability with the gate off, computed by the recorder, never by the viewer),
+it gets a "p gate off" column, and the missed-lead callout says "visibility cut
+its click chance from X% to Y%". Without it nothing extra is shown.
+`end.page` is used when present, with the image's natural size as fallback.
+URLs in `why` are shortened to the map's labels. A missed-lead row is never
+split by href; it says "N different links" when its label covers more than one.
+A browser test uses a 2400 px page with a 300 px viewport to check the fold line
+and the scroll to a click below it, since every fixture page is about 900 px.
+
+### D-029 — The replay captures steps; it never draws on or scrolls the page
+**Date:** 2026-11-10 · **Status:** active · supersedes the video and overlay
+parts of D-026
+D-026's in-page overlay was unsafe: the smooth-scroll glide kept drifting after
+the restore on long pages, the overlay recomputed its marks in a second place
+that the replay signature did not cover, and its test passed with the overlay
+left in the DOM and flaked about 1 run in 8. The user chose our own capture
+over Playwright's video/tracing, so the replay now only takes full-page
+screenshots and writes data (`replays/visitor-NNN/replay.json`, `run.json`);
+the viewer draws the marks. `--record-pace-ms` is gone.
+
+What is kept from D-026: replay from the same seed (`personas`), the `on_step`
+hook, median-visitor picking, FAILED handling, and GoalLeak still aborting.
+
+**Stronger divergence check.** Each step's url, clicked name, href and
+visibility, promise and `missed`, plus exit url and reason, must equal the
+measured trace. Promise is the best score on the page, so it covers the whole
+observation rather than only the click. `href` was added to the trace step for
+this. A diverged replay is deleted with its screenshots.
+
+**One formula for click probability.** `policy.softmax_weights` is what
+`choose()` samples from; `choice_probabilities` divides the same weights. The
+recorder shows those, not a recomputation. `choose` keeps its unnormalised
+sampling, so seeded runs are byte-identical to before.
+
+**Finding while writing the test.** The old test's HTML (no doctype, default
+fonts) changed the 10px link's measured height from 13 to 11 after *any*
+screenshot, including a CDP one, so `observe()` equality failed with nothing of
+ours involved. On the real fixture pages observation is identical before and
+after a full-page screenshot (index and sale checked), and on a standards-mode
+page with an explicit font. The new test uses `<!doctype html>`, a set font and
+a wait for first layout. It asserts exact scroll, the page's `outerHTML` and
+`observe()` before and after, on a page with a link in the viewport at scrollY 120 (asserted `inView`)
+and one at y≈4940. (An earlier version of this test had no link in view at that
+scroll, so it never exercised that branch; the three mutations below were re-run
+after fixing it and each still fails.)
+Mutation check: adding a scroll to y=3000, a one-pixel scrollBy, or an appended
+`<div>` to the capture each makes it fail; reverted, it passes 10/10 runs.
+Caveat: a quirks-mode site may still show a layout shift after the first
+screenshot; the step-by-step divergence check is what would catch it.
+
+**Pre-commit fixes (second review; no validity defect found, seeded runs at HEAD
+and in the working tree were byte-identical).**
+1. `--record DIR` cleared `DIR/replays`, so `--record ~` would delete the user's
+   own `~/replays`. It now refuses a directory that is non-empty and has no
+   `run.json` from a previous recording (checked in `main` before the population
+   runs, and again in `record_population`); only a previous recording's
+   `replays/` is cleared.
+2. The replay signature compared only the clicked link, promise and missed lead,
+   so a change to a non-clicked, non-best candidate would still be saved with its
+   numbers shown; one-step visits were most exposed. Each trace step now carries
+   a `digest` of every candidate's (name, href, visibility), and it is in the
+   signature. Forced check: changing the last candidate's visibility by 0.01 on
+   replay only, 3 of 3 replays were discarded; with the digest removed from the
+   signature, 2 of 3 were saved with that change in them.
+   First version hashed visibility to 4 decimals and discarded 2 of 4 good
+   replays on the real run: the same page re-laid out gives 0.4038 vs 0.4037
+   (tents.html) and 0.3697 vs 0.3698 (packs.html). The digest now rounds to 2
+   decimals, which still catches a 0.01 change; a real shift near a rounding
+   boundary can still cause a false discard, which fails safe (no recording,
+   never a wrong one). Same noise exists in `promise` at 3 decimals.
+3. `spent` meant two things: before the action in `traces.json`, after it in
+   `replay.json`. The trace field is now `spent_before`, and `replay.json` steps
+   carry `spent_before` too, which the viewer uses rather than rebuilding it from
+   rounded `spent - cost`.
+
+**Measured** (northlake2/footer, n=40, seed 11, gate all, embedding): 4 replays
+saved, 0 discarded or failed. 1.7 MB for the directory (36 PNGs, 1.4 MB, about 40 KB each).
+In the first replay the missed 'Restock alerts' link had choice probability
+5.1% on the page it was missed, with visibility 0.2.
+
+### D-028 — The recording viewer: a layered flow map, through and stopped drawn apart
+**Date:** 2026-11-10 · **Status:** active for the flow map; the video cards are superseded by D-030
+`python -m humanbrowser.viewer DIR` writes `DIR/index.html` from `traces.json`
+and the `.webm` files: one file, inline CSS/JS, no CDN, no new dependency.
+
+**Layout is computed in Python, drawn as SVG.** Column = fewest clicks from the
+start page (BFS over observed clicks), rows ordered by the weighted mean row of
+each page's parents. A layered layout because the question is "how far from the
+start did they get"; force layouts put pages in different places on every run
+and need a JS library. Computing it in Python also makes it testable.
+
+**Only forward edges are drawn by default.** On `northlake2/footer` (n=40) the
+first render drew every click, and back/sideways clicks (to the nav, between
+category pages) turned the map into a dashed hairball. They are still in the
+data and appear when a page is selected. Self-loops are only in the tooltip.
+
+**Two bars per page on one scale (fraction of n): "was here" and "stopped here
+without finding it".** They are different quantities, so they are not stacked.
+Pages where the target was found get a green outline and a "FOUND HERE" count.
+The start page gets a blue outline. A caveat under the map repeats D-026: a page
+with many stops is where patience ran out, not where the defect is. Ranking
+missed leads, which is the real stuck-point view, waits on the per-step
+missed-lead field.
+
+**Numbers in the header:** found k/n with a Wilson CI (D-021), and the median
+actions to find with its percentile. Every percentile is one `pct()` span that
+carries `ruler: PROVISIONAL` while the ruler is unmeasured. There is no 0-100
+score. The ruler is `data/effort_ruler.json` at view time: `traces.json` does
+not record which ruler the run used.
+
+**Untrusted text never reaches script.** URLs and link text are HTML-escaped into
+the SVG and cards. The JS gets only integer node ids and counts, plus labels in
+JSON with `<` escaped. Selecting a page filters recordings by those ids.
+
+### D-027 — The report ranks missed leads; exit pages are demoted
+**Date:** 2026-11-10 · **Status:** active
+D-026 found that quitters stop on arbitrary pages, so the report now says where
+the lead was *missed*. Each step in the trace carries `missed`: the strongest
+link by raw scent, if it was below `visibility.DEFAULT_THRESHOLD` and was not
+the one clicked (name, href, scent, visibility), else `None`. `report()` ranks
+(label, page) pairs by visitors who missed it at least once, split found / not
+found. "Most common exit" stays, annotated as where patience ran out. The
+per-step field is in `traces.json` via the steps.
+
+**One copy of the rule:** `run.missed_lead()`, called by `visit()` and by the
+recorder's overlay. It is pure (no rng, no page access); an invariant test
+asserts that recording it changes neither the click sequence nor the rng state.
+
+**Recorded only when `gate.choose` is on** (chosen over "record always, filter in
+the report"). With the choice channel off the visitor weighs a dim link at full
+visibility, so calling it "missed" would be false, and filtering at report time
+would put the rule in two places. The overlay already conditioned on it.
+
+**Measured** (northlake2/footer, n=40, seed 11, gate all, embedding scent):
+found 23/40, 17 quit. 'Restock alerts' was missed by 39/40 visitors on
+index.html (22 found anyway, 17 not), and again on apparel.html (16/40) and
+sale.html (16/40). The exit page was sale.html, but the defect is the footer
+link, missed on the very first page by nearly everyone. Note "missed" is not
+"failed": 22 of the 39 who missed it on the home page found it later.
+
+**Also fixed in the recorder:** a failure inside one replay (e.g. navigation
+timeout) now deletes its raw video, yields `FAILED`, and continues with the
+remaining picks. `GoalLeak` still aborts, since it invalidates the run.
+
+### D-026 — Video is a verified replay, never a mode of the measurement
+**Date:** 2026-11-10 · **Status:** superseded by D-029 (video and overlay parts)
+`--record DIR` runs the population unrecorded as before, then replays a few
+representative visitors from the same seed with Playwright video on
+(`humanbrowser/record.py`), slowed down, with an overlay: the link chosen, the
+links below the noticeability threshold, the strongest lead by scent when it was
+one of those, a patience meter, and an end card with the effort percentile. It
+also writes every visitor's trace to `traces.json`.
+
+**Why a replay.** Everything that makes a video watchable can change what the
+visitor observes: a 1.2 s hold per action, scrolling the chosen link into view,
+and overlay nodes in the DOM. `OBSERVE_JS` tests occlusion with
+`elementFromPoint` and computes `inView` from the scroll position, so recording
+inside the measured run would let the camera move the number. Three guards:
+
+1. The overlay is `pointer-events:none`, and it is removed and the scroll
+   position restored before the loop observes again. A browser test asserts
+   `observe()` returns the identical list before and after.
+2. `visit()` gained one `on_step` hook, called after the action is chosen and
+   paid for. A loop test asserts the click sequence and exit are unchanged by it.
+3. The replay's (url, clicked) sequence, exit URL and reason are compared with
+   the measured trace. A replay that diverges is **deleted, not saved** — a
+   video of a different visit presented as the measured one is worse than no
+   video. On the static fixture 3/3 replays matched; expect divergence on real
+   sites, where slower pacing changes what has rendered (D-017).
+
+`personas(seed, n)` now generates (persistence, visitor seed) for both the run
+and the replay. Two generators for one population is the D-025 persistence bug.
+
+**Representative = the median-effort visitor at each of the commonest exit
+pages, plus the median-effort finder.** Median rather than longest, because the
+longest wander is the most watchable and the least typical.
+
+**Limit found on the first run, and it matters for the flow map.** On
+`northlake2/footer` (n=40, seed 11, gate on, embedding scent) the 17 quitters
+stopped on 13 different pages and the commonest held only 3. Visitors do
+not get stuck *at* a page here; they miss the footer link on the first page and
+then run out of patience wherever they happen to be. So "most common exit" is
+close to arbitrary on this fixture, and the informative frame is the first one,
+where the lead is marked as not noticed. Do not read the exit page as the
+location of the defect. A stuck-point summary should rank *missed leads*, not
+exit URLs.
+
+**Not done:** real sites, modals and drawers (the open "what counts as a page"
+question), and a viewer page. Videos are `.webm` at 1440x900.
 
 ### D-025 — Nine defects from the first code review of this work
 **Date:** 2026-09-03 · **Status:** active

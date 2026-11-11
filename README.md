@@ -43,6 +43,21 @@ every report it produces.
 `--compare` runs it twice, with and without the visibility gate, and prints the
 difference.
 
+## Watching a visitor get stuck
+
+    --record out/            # after the run, replay representative visitors and capture each step
+    --record-exits 3         # how many of the commonest stuck pages to cover
+
+Replays the median-effort visitor at each of the commonest exit pages, plus the
+median-effort finder, from the same seed. At every action it saves a full-page
+screenshot and what the visitor saw: each link with its scent, visibility,
+choice probability and whether it would be noticed, which one was clicked, and
+the strongest lead it missed. Nothing is drawn on or scrolled in the page; the
+viewer draws the marks. Files: `out/run.json`, `out/traces.json` (every
+visitor), `out/replays/visitor-NNN/replay.json` plus its PNGs, and the viewer
+built from them. A replay that does not reproduce the measured visit step for
+step is deleted rather than saved.
+
 The gate is three independent channels, because bundling them behind one flag
 makes a found-rate delta unattributable:
 
