@@ -6,9 +6,14 @@ count, they abandon when a task is costing notably more than tasks like it
 normally cost. So we need to know what "normally" is, in real human actions, on
 real websites.
 
-Mind2Web (NeurIPS 2023) is that reference: 2,350 tasks, 137 websites, 31
-domains, each with the complete human action sequence recorded via Playwright.
-`len(action_reprs)` for a task is the number of actions a human actually took.
+Mind2Web (NeurIPS 2023, Deng et al., CC BY 4.0) is that reference: 2,350 tasks,
+137 websites, 31 domains, each with the complete human action sequence recorded
+via Playwright. `len(action_reprs)` for a task is the number of actions a human
+actually took. The MEASURED ruler here uses the public train split only: 1,009 of
+the 2,350 tasks (the rest are a password-protected test archive, not opened).
+
+About 12% of those actions are TYPE or SELECT, which our visitor never performs.
+They are still effort a human paid, so they stay in the count (D-031).
 
 IMPORTANT — survivorship: every Mind2Web task was completed and verified. There
 are no abandonments in it. So it calibrates EFFORT UNDER GOAL PURSUIT, never
@@ -19,9 +24,17 @@ Its annotators were also paid and instructed, i.e. more motivated than an idle
 visitor, so the distribution is an UPPER BOUND on real-world patience. Difficulty
 scores built on it understate the problem, which is the safe direction.
 
+Ties. Counts are integers, so many tasks share each value. `budget_at` is the
+lower empirical quantile (a step function, no interpolation: a budget of 13.7
+actions would claim precision the data do not have). `percentile_of` counts tasks
+that cost STRICTLY fewer, matching the report's wording "more effort than X% of
+tasks"; a visitor at exactly the median therefore reads below 50%. Both choices
+understate difficulty rather than overstate it (D-031).
+
 Usage:
-    python -m humanbrowser.ruler build     # needs network + `pip install datasets`
-    python -m humanbrowser.ruler show
+    python -m humanbrowser.ruler build [--split train] [--out PATH]
+                                       # needs `datasets`; HF_HUB_OFFLINE=1 if cached
+    python -m humanbrowser.ruler show [--path PATH]
 """
 from __future__ import annotations
 
@@ -58,7 +71,11 @@ class Ruler:
     # -- lookups -------------------------------------------------------------
 
     def budget_at(self, quantile: float) -> float:
-        """Action budget corresponding to a quantile of human effort."""
+        """Action budget corresponding to a quantile of human effort.
+
+        Measured: the lower empirical quantile, an observed integer count. It is
+        a step function of `quantile`, constant across any run of tied tasks.
+        """
         if self.counts:
             if not 0 < quantile < 1:
                 raise ValueError("quantile must be in (0,1)")
@@ -67,7 +84,11 @@ class Ruler:
         return _lognormal_quantile(self.mean, PROVISIONAL_SIGMA, quantile)
 
     def percentile_of(self, actions: float) -> float:
-        """What fraction of human tasks cost fewer actions than this?"""
+        """What fraction of human tasks cost strictly fewer actions than this?
+
+        Ties count as "not fewer" (bisect_left). For any quantile q this gives
+        percentile_of(budget_at(q)) <= q, never above it.
+        """
         if self.counts:
             return bisect_left(self.counts, actions) / len(self.counts)
         return _lognormal_cdf(self.mean, PROVISIONAL_SIGMA, actions)
@@ -159,10 +180,11 @@ def provisional() -> Ruler:
         counts=None,
         quantiles=q,
         mean=MIND2WEB_MEAN_ACTIONS,
-        n=2350,
+        n=0,                      # modelled from a published mean; no tasks measured
         provenance=(
-            "PROVISIONAL. Log-normal with mean=7.3 (Mind2Web published mean, "
-            f"Deng et al. NeurIPS 2023) and assumed sigma={PROVISIONAL_SIGMA}. "
+            "PROVISIONAL. Log-normal with mean=7.3 (published mean of the full "
+            "2,350-task Mind2Web, Deng et al. NeurIPS 2023) and assumed "
+            f"sigma={PROVISIONAL_SIGMA}. "
             "The mean is real; the spread is a modelling assumption. "
             "Replace by running `python -m humanbrowser.ruler build`."
         ),
@@ -184,24 +206,42 @@ def build(split: str = "train") -> Ruler:
         quantiles={},
         mean=mean,
         n=len(counts),
-        provenance=f"MEASURED from osunlp/Mind2Web split={split} (len(action_reprs)).",
+        provenance=(f"MEASURED from osunlp/Mind2Web split={split} (len(action_reprs)): "
+                    f"{len(counts)} of the dataset's 2,350 tasks; the test splits "
+                    "(a password-protected archive) were not used. Deng et al., "
+                    "Mind2Web, NeurIPS 2023, CC BY 4.0."),
         measured=True,
     )
     r.quantiles = {f"{q:.2f}": r.budget_at(q) for q in QUANTILES}
     return r
 
 
-if __name__ == "__main__":
-    import sys
+def main(argv=None) -> int:
+    import argparse
 
-    cmd = sys.argv[1] if len(sys.argv) > 1 else "show"
-    if cmd == "build":
-        ruler = build(sys.argv[2] if len(sys.argv) > 2 else "train")
-        ruler.save()
-        print(f"measured {ruler.n} tasks -> {DEFAULT_PATH}")
+    ap = argparse.ArgumentParser(prog="python -m humanbrowser.ruler")
+    sub = ap.add_subparsers(dest="cmd")
+    b = sub.add_parser("build", help="measure the ruler from Mind2Web and save it")
+    b.add_argument("--split", default="train")
+    b.add_argument("--out", default=DEFAULT_PATH,
+                   help="where to write the ruler (default: the shipped data/effort_ruler.json)")
+    sh = sub.add_parser("show", help="print a ruler")
+    sh.add_argument("--path", default=DEFAULT_PATH)
+    a = ap.parse_args(argv)
+
+    if a.cmd == "build":
+        ruler = build(a.split)
+        ruler.save(a.out)
+        print(f"measured {ruler.n} tasks -> {os.path.abspath(a.out)}")
     else:
-        ruler = Ruler.load() if os.path.exists(DEFAULT_PATH) else provisional()
+        path = getattr(a, "path", DEFAULT_PATH)
+        ruler = Ruler.load(path) if os.path.exists(path) else provisional()
     print(("MEASURED" if ruler.measured else "PROVISIONAL") + f"  n={ruler.n}  mean={ruler.mean:.2f}")
     print(ruler.provenance)
     for q, v in ruler.quantiles.items():
         print(f"  p{float(q)*100:>4.0f}  {v:6.1f} actions")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

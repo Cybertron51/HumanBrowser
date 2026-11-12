@@ -131,3 +131,46 @@ def test_observe_reports_geometry_in_document_coordinates(page):
     assert deep["top"] > VIEWPORT["height"]
     assert deep["inView"] is False
     assert deep["visibility"] < visibility.DEFAULT_THRESHOLD
+
+
+# -- D-029: the recorder's capture step must leave the page exactly as it was -
+
+def test_the_capture_step_leaves_the_page_unchanged(page, tmp_path):
+    from humanbrowser import policy
+    from humanbrowser.budget import EffortBudget
+    from humanbrowser.record import _Capture
+    from humanbrowser.ruler import provisional
+    from humanbrowser.run import Gate
+
+    page.set_content("""<!doctype html>
+      <body style="margin:0;background:#fff;font-family:Arial">
+        <a href="/a" style="display:block;width:400px;height:60px;color:#000">Top</a>
+        <div style="height:240px"></div>
+        <a href="/n" style="display:block;width:400px;height:40px;color:#000">Near</a>
+        <div style="height:4600px"></div>
+        <a href="/b" style="font-size:10px;color:#999">Buried</a>
+      </body>""")
+    page.evaluate("() => window.scrollTo(0, 120)")
+    page.wait_for_timeout(100)      # let the first frame lay out before measuring
+    before = observe(page)
+    seen = {e["name"]: e for e in before}
+    assert set(seen) == {"Top", "Near", "Buried"}
+    assert seen["Near"]["inView"] is True          # in the viewport at scrollY 120
+    assert seen["Top"]["inView"] is False and seen["Buried"]["inView"] is False
+    assert seen["Buried"]["top"] > 4500
+    dom = page.evaluate("() => document.documentElement.outerHTML")
+    scroll = page.evaluate("() => [scrollX, scrollY]")
+    assert scroll == [0, 120]
+
+    budget = EffortBudget(provisional(), 0.90)
+    budget.spend(0.5)
+    scores = policy.score_elements(before, "anything", gate=True)
+    cap = _Capture("anything", Gate.all_on(), None, tmp_path)
+    cap.on_step(page, before, seen["Near"], budget, {
+        "scores": scores, "probs": policy.choice_probabilities(scores),
+        "ungated_scores": scores, "revisit": [False] * len(before)})
+
+    assert page.evaluate("() => [scrollX, scrollY]") == scroll
+    assert page.evaluate("() => document.documentElement.outerHTML") == dom
+    assert observe(page) == before
+    assert cap.steps[0]["page"]["height"] > 4900      # it really captured the whole page

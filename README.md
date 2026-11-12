@@ -43,6 +43,21 @@ every report it produces.
 `--compare` runs it twice, with and without the visibility gate, and prints the
 difference.
 
+## Watching a visitor get stuck
+
+    --record out/            # after the run, replay representative visitors and capture each step
+    --record-exits 3         # how many of the commonest stuck pages to cover
+
+Replays the median-effort visitor at each of the commonest exit pages, plus the
+median-effort finder, from the same seed. At every action it saves a full-page
+screenshot and what the visitor saw: each link with its scent, visibility,
+choice probability and whether it would be noticed, which one was clicked, and
+the strongest lead it missed. Nothing is drawn on or scrolled in the page; the
+viewer draws the marks. Files: `out/run.json`, `out/traces.json` (every
+visitor), `out/replays/visitor-NNN/replay.json` plus its PNGs, and the viewer
+built from them. A replay that does not reproduce the measured visit step for
+step is deleted rather than saved.
+
 The gate is three independent channels, because bundling them behind one flag
 makes a found-rate delta unattributable:
 
@@ -105,9 +120,26 @@ from the footer into the main nav raises the found rate by **+10% (p=0.017,
 n=300, replicated)**. With the visibility gate switched off the same move does
 nothing at all — as it must, since nothing in the model can then see position.
 
-Next: M3, the real saliency model, and M5 validation. The effort ruler is still
-modelled rather than measured, so absolute percentiles are not yet trustworthy;
-within-instrument comparisons are unaffected.
+Next: M3, the real saliency model, and M5 validation. The effort ruler is now
+measured (Mind2Web train split, 1,009 tasks), but M-001 to M-008 were taken on
+the earlier modelled ruler and have not been re-run against it.
+
+## The effort ruler
+
+Percentiles are against recorded human effort in Mind2Web: the number of actions
+a person took to complete a task, 1,009 tasks from the public train split (mean
+7.7, median 6, p90 14). Build or inspect it with
+`python -m humanbrowser.ruler build [--out PATH]` and `show`. Read it knowing:
+
+- It holds completed tasks only, by paid annotators: effort under goal pursuit,
+  an upper bound on a casual visitor's patience, not a measure of abandonment.
+- About 12% of its actions are typing or selecting, which a simulated visitor
+  never does. Only the train split (73 of 137 sites) is used.
+- Counts are integers, so "more effort than X% of tasks" counts strictly fewer
+  tasks; a visitor at the median reads about 41%, not 50%.
+
+Data: Mind2Web, Deng et al., "Mind2Web: Towards a Generalist Agent for the Web",
+NeurIPS 2023, https://osu-nlp-group.github.io/Mind2Web/, licensed CC BY 4.0.
 
 `DECISIONS.md` records what is settled, what was tried and abandoned, and which
 predictions turned out wrong. Read it before proposing changes — several

@@ -57,6 +57,21 @@ def score_elements(elements: list[dict], goal: str, *, gate: bool,
     return out
 
 
+def softmax_weights(scores: list[float], temperature: float = DEFAULT_TEMPERATURE) -> list[float]:
+    """Unnormalised softmax weights. The one copy of the choice formula: `choose`
+    samples from these and the recorder's probabilities are derived from them."""
+    m = max(scores)
+    return [math.exp((s - m) / max(temperature, 1e-6)) for s in scores]
+
+
+def choice_probabilities(scores: list[float],
+                         temperature: float = DEFAULT_TEMPERATURE) -> list[float]:
+    """Probability that `choose` picks each element, given its scores."""
+    exps = softmax_weights(scores, temperature)
+    total = sum(exps)
+    return [e / total for e in exps]
+
+
 def choose(elements: list[dict], goal: str, *, gate: bool, rng: random.Random,
            visited: set[str] | None = None,
            temperature: float = DEFAULT_TEMPERATURE,
@@ -67,7 +82,7 @@ def choose(elements: list[dict], goal: str, *, gate: bool, rng: random.Random,
     scores = score_elements(elements, goal, gate=gate, visited=visited,
                             scent_model=scent_model)
     m = max(scores)
-    exps = [math.exp((s - m) / max(temperature, 1e-6)) for s in scores]
+    exps = softmax_weights(scores, temperature)
     total = sum(exps)
     r = rng.random() * total
     acc = 0.0

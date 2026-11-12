@@ -10,6 +10,7 @@ import random
 
 import pytest
 
+from humanbrowser import visibility
 from humanbrowser.budget import EffortBudget
 from humanbrowser.run import Gate, MAX_STEPS, visit
 
@@ -108,7 +109,7 @@ def test_every_step_is_traced(ruler):
     page = FakePage(pages=_SITE(), target_on="/never")
     _, _, trace, _ = _visit(page, ruler, unlimited=True)
     assert len(trace.steps) == MAX_STEPS
-    assert all({"url", "clicked", "promise", "visibility", "spent"} <= s.keys()
+    assert all({"url", "clicked", "promise", "visibility", "spent_before", "digest"} <= s.keys()
                for s in trace.steps)
 
 
@@ -199,3 +200,140 @@ def test_eval_stable_passes_the_argument_through():
         def wait_for_timeout(self, ms): pass
 
     assert eval_stable(Echo(), "js", "#sel") == ("js", "#sel")
+
+
+# -- the recorder's hook must be an observer, never a participant (D-026) ------
+
+@pytest.mark.parametrize("seed", range(6))
+def test_the_step_hook_does_not_change_the_visit(ruler, seed):
+    from humanbrowser import policy
+    plain, hooked, calls, decisions = FakePage(pages=_SITE()), FakePage(pages=_SITE()), [], []
+    rng_a, rng_b = random.Random(seed), random.Random(seed)
+    a = visit(plain, "/", "shop the collection", "#collection", EffortBudget(ruler, 0.90),
+              gate=Gate.all_on(), rng=rng_a)
+    b = EffortBudget(ruler, 0.90)
+    c = visit(hooked, "/", "shop the collection", "#collection", b, gate=Gate.all_on(),
+              rng=rng_b,
+              on_step=lambda page, els, chosen, budget, decision: (
+                  calls.append(chosen["name"]), decisions.append(decision)))
+    assert hooked.clicks == plain.clicks
+    assert (c[0], c[3], c[2].exit_url) == (a[0], a[3], a[2].exit_url)
+    assert rng_a.getstate() == rng_b.getstate()   # computing p_ungated consumed nothing
+    assert a[2].steps == c[2].steps               # incl. the observation digest
+    assert len(calls) == b.actions            # once per action, including the last
+    for d in decisions:
+        assert sum(policy.choice_probabilities(d["ungated_scores"])) == pytest.approx(1.0)
+
+
+def test_ungated_probabilities_equal_gated_ones_when_the_choice_channel_is_off(ruler):
+    from humanbrowser import policy
+    seen = []
+    visit(FakePage(pages=_SITE()), "/", "shop the collection", "#collection",
+          EffortBudget(ruler, 0.90), gate=Gate(), rng=random.Random(0),
+          on_step=lambda page, els, chosen, budget, d: seen.append(d))
+    assert seen and all(policy.choice_probabilities(d["scores"]) ==
+                        policy.choice_probabilities(d["ungated_scores"]) for d in seen)
+
+
+def test_personas_are_reproducible_and_prefix_stable():
+    from humanbrowser.run import personas
+    assert list(personas(7, 5)) == list(personas(7, 5))
+    assert list(personas(7, 9))[:5] == list(personas(7, 5))
+
+
+def test_representatives_are_the_median_of_the_commonest_exits():
+    from humanbrowser.budget import Outcome
+    from humanbrowser.record import pick_representatives
+    from humanbrowser.run import Trace
+    rows = [("/a", False, 3), ("/a", False, 9), ("/a", False, 20),
+            ("/b", False, 5), ("/t", True, 2), ("/t", True, 4), ("/t", True, 30)]
+    outs = [Outcome(f, n, n, 10, 1.0, 0.0, "found" if f else "quit") for _, f, n in rows]
+    trs = [Trace(exit_url=u) for u, _, _ in rows]
+    picks = pick_representatives(outs, trs, exits=1)
+    assert [i for i, _ in picks] == [1, 5]    # median quitter at /a, median finder
+
+
+# -- recording the missed lead is observation only (D-027) ---------------------
+
+def _dim_lead_site():
+    return {"/": [element("Notify me when back in stock", "/n", contrast=1.1, area=150.0, top=3000.0),
+                  element("Shop the collection", "/shop"),
+                  element("About", "/about")],
+            "/shop": [element("Home", "/")], "/about": [element("Home", "/")],
+            "/n": [element("Home", "/")]}
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_recording_the_missed_lead_changes_neither_path_nor_randomness(ruler, seed, monkeypatch):
+    import humanbrowser.run as run
+
+    def go():
+        rng = random.Random(seed)
+        page = FakePage(pages=_dim_lead_site(), target_on="/never")
+        out = visit(page, "/", "notify me when in stock", "#x", EffortBudget(ruler, 0.90),
+                    gate=Gate.all_on(), rng=rng)
+        return page.clicks, out[3], rng.getstate(), out[2]
+
+    clicks, reason, state, trace = go()
+    monkeypatch.setattr(run, "missed_lead", lambda *a, **k: None)
+    clicks0, reason0, state0, trace0 = go()
+    assert (clicks, reason, state) == (clicks0, reason0, state0)
+    assert all(s["missed"] is None for s in trace0.steps)
+    assert any(s["missed"] for s in trace.steps)
+
+
+def test_the_missed_lead_is_never_the_clicked_element_or_a_visible_one(ruler):
+    page = FakePage(pages=_dim_lead_site(), target_on="/never")
+    _, _, trace, _ = visit(page, "/", "notify me when in stock", "#x",
+                           EffortBudget(ruler, 0.90), gate=Gate.all_on(),
+                           rng=random.Random(1))
+    for s in trace.steps:
+        if s["missed"]:
+            assert s["missed"]["name"] != s["clicked"]
+            assert s["missed"]["visibility"] < visibility.DEFAULT_THRESHOLD
+
+
+def test_no_missed_lead_is_recorded_when_the_choice_channel_is_off(ruler):
+    """With choose off the dim link was weighed at full visibility: not missed."""
+    for gate in (Gate(), Gate(detect=True), Gate(cost=True)):
+        page = FakePage(pages=_dim_lead_site(), target_on="/never")
+        _, _, trace, _ = visit(page, "/", "notify me when in stock", "#x",
+                               EffortBudget(ruler, 0.90), gate=gate, rng=random.Random(1))
+        assert trace.steps and all(s["missed"] is None for s in trace.steps), gate.label
+
+
+# -- the replay must prove it saw the same page, and must not delete user files (D-029)
+
+def test_the_signature_covers_every_candidate_not_just_the_clicked_one():
+    from humanbrowser.record import _signature
+    from humanbrowser.run import Trace, observation_digest
+    base = [element("A", "/a"), element("B", "/b"), element("C", "/c")]
+    changed = [dict(e) for e in base]
+    changed[2] = dict(changed[2], visibility=0.123)         # not clicked, not the best
+    step = lambda els: {"url": "/", "clicked": "A", "href": "/a", "visibility": 1.0,
+                        "promise": 0.5, "missed": None, "digest": observation_digest(els)}
+    t1, t2 = Trace(steps=[step(base)], exit_url="/"), Trace(steps=[step(changed)], exit_url="/")
+    assert observation_digest(base) == observation_digest([dict(e) for e in base])
+    assert _signature(t1, "quit") != _signature(t2, "quit")
+
+
+def test_record_refuses_a_directory_that_is_not_a_previous_recording(tmp_path):
+    from humanbrowser.record import RecordDirError, check_record_dir, record_population
+    (tmp_path / "replays").mkdir()
+    (tmp_path / "replays" / "mine.txt").write_text("keep")
+    with pytest.raises(RecordDirError):
+        check_record_dir(tmp_path)
+    with pytest.raises(RecordDirError):
+        next(record_population("u", "g", "t", [], [], gate=Gate(), out_dir=tmp_path, n=0,
+                                 quantile=0.9, ruler=None, seed=0, unlimited=False,
+                                 max_steps=1, settle_ms=0))
+    assert (tmp_path / "replays" / "mine.txt").read_text() == "keep"
+
+
+def test_record_accepts_new_empty_and_previous_recording_directories(tmp_path):
+    from humanbrowser.record import check_record_dir
+    check_record_dir(tmp_path / "does-not-exist-yet")
+    check_record_dir(tmp_path)                                # empty
+    (tmp_path / "run.json").write_text("{}")
+    (tmp_path / "replays").mkdir()
+    check_record_dir(tmp_path)                                # a previous recording

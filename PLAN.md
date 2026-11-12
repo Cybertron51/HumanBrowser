@@ -20,8 +20,9 @@ and names no dedicated technique for measuring it.
 ## The metric
 
 Effort is denominated in **human actions**, read off a reference distribution
-built from Mind2Web: 2,350 tasks, 137 real websites, complete human action
-sequences, mean 7.3 actions per task.
+built from Mind2Web (2,350 tasks, 137 websites, complete human action
+sequences). The measured ruler uses the public train split: 1,009 tasks, mean
+7.7 actions per task (D-031).
 
 A run reports:
 
@@ -63,7 +64,7 @@ Two properties make the conservatism work in our favour:
 | Module | Does | Status |
 |---|---|---|
 | `observe.py` | Turn a live page into the visitor's observation in one JS pass: interactive elements, geometry, contrast, occlusion-tested, document-wide with a depth penalty | **working** |
-| `ruler.py` | Human effort reference distribution and percentile lookups | **working** (ruler provisional — see below) |
+| `ruler.py` | Human effort reference distribution and percentile lookups | **working** (ruler measured, train split — see below) |
 | `budget.py` | Effort budget, frustration-weighted spending, quit rule, population sampling, survival curves | **working** |
 | `visibility.py` | Predicted noticeability per element; gates what the policy may consider. Crude stand-in for a saliency model | **working** (heuristic — M3 replaces it) |
 | `policy.py` | Choose the next action: scent × visibility | **working** (keyword scent — M4 replaces it) |
@@ -204,9 +205,9 @@ Keyword → embedding scent (this is now load-bearing, see M2). Measured ruler
 instead of the estimate. Reject goals containing the target's own words.
 
 ### M5 — validation
-Replace the provisional ruler with the measured one:
-`pip install datasets && python -m humanbrowser.ruler build`. Needs an
-unrestricted network — HuggingFace is blocked from some environments.
+**Ruler: done** (D-031). The measured Mind2Web train ruler (n=1,009) replaced
+the provisional one. Still to do for M5: re-run M-001 to M-008 on it (they were
+taken at a 12.7 budget, the new one is 14), and the validation below.
 
 Then validate, in ascending order of cost and strength:
 
@@ -228,13 +229,15 @@ claim narrow enough to survive scrutiny.
 
 ## What is provisional right now
 
-`data/effort_ruler.json` is **modelled, not measured.** The mean (7.3 actions) is
-the published Mind2Web figure. The spread is a log-normal assumption with
-σ = 0.55, chosen because task-effort distributions are right-skewed and bounded
-below at 1. Every percentile in the current output inherits that assumption.
+The ruler is **measured**, from the Mind2Web train split only (1,009 of 2,350
+tasks, 73 of 137 websites; D-031). Its caveats: 12% of its actions are TYPE or
+SELECT that our visitor never performs, it holds completed tasks only (D-002),
+and the percentile treats ties as "not fewer".
 
-Fix it in M3. Until then, reports must print `ruler: PROVISIONAL` — `budget.py`
-already carries the flag through `summarize()`.
+What is still provisional: **every measurement M-001 to M-008 and M-010 was
+taken on the old modelled ruler** and has not been re-run. `provisional()` still
+exists and reports still print `ruler: PROVISIONAL` whenever it is the ruler in
+use.
 
 ---
 
