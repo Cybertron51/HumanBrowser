@@ -433,6 +433,60 @@ it proves — read D-008 and D-009 before quoting this number.
 
 ## Decisions
 
+### D-031 — The effort ruler is measured (Mind2Web train, n=1,009); ties are steps, not interpolation
+**Date:** 2026-11-10 · **Status:** active · supersedes D-001
+`data/effort_ruler.json` is now `ruler.build("train")` (M-009): 1,009 tasks, mean
+7.706, p50/75/90/95 = 6/10/14/17, identical to the dry run (counts and
+quantiles compared). The default budget (q=0.90) rose from 12.7 to 14 actions.
+`python -m humanbrowser.ruler build` now takes `--split` and `--out PATH`, so a
+dry run needs no code workaround and cannot overwrite the shipped file (tested).
+
+**EVERY measurement M-001 to M-008 and M-010 was taken on the provisional ruler**
+(log-normal, budget 12.7 at q=0.90). They are not re-run here. Found rates, the
++10 point position effect (M-008), M-010's probabilities (which do not depend
+on the ruler) and the quit pages all used the smaller budget; expect patience,
+and so found rates and the exit mix, to shift a little, and re-run before
+quoting any of them against the new ruler. One check: the footer run (n=40,
+seed 11, gate on, embedding) gives 23/40 found before and after; the median
+quitter now quits 12 actions in rather than 11, and the median finder's 5
+actions reads as the 29th percentile rather than the 34th.
+
+**Ties.** Counts are integers: 145 of 1,009 tasks took exactly 4 actions, 118
+took 5, 107 took 6. Two deliberate choices.
+- `budget_at(q)` is the lower empirical quantile, a step function: no
+  interpolation, since 13.7 actions would claim precision the data do not have,
+  and a budget that is always an observed count is easy to explain. It is
+  constant across a run of tied tasks. Persistence (a log-normal multiplier per
+  visitor) already smooths budgets across the population.
+- `percentile_of(a)` counts tasks that cost strictly fewer (`bisect_left`),
+  because the report says "more effort than X% of tasks" and that is the literal
+  meaning. The cost: a visitor at exactly the median (6 actions) reads 41%, not
+  50%, and the percentile jumps by 10 to 15 points between adjacent counts
+  around 4 and 5 (4: 15%, 5: 29%, 6: 41%, 7: 52%). Both choices understate
+  difficulty, the direction D-002 already treats as safe. Mid-rank
+  (strictly fewer plus half the ties) would read 46% at 6 and is the alternative
+  if the strict wording proves to mislead.
+Invariants tested: budgets are observed counts and monotone in q;
+percentile_of(budget_at(q)) never exceeds q; percentile_of(budget_at(q)+1) is
+within one task of q or above; 0 below the fastest task and 1 above the slowest.
+
+**Caveats the measured ruler carries.**
+1. n=1,009, train split only (73 of 137 websites). The other 1,341 tasks are a
+   password-protected test archive that was not opened.
+2. 12% of actions are TYPE (936) or SELECT (326) of 7,775; our visitor only
+   clicks. They stay in the count because a human paid for them, but a visitor
+   click and a ruler action are not strictly the same unit.
+3. Completed tasks only (D-002): effort under goal pursuit, not abandonment, and
+   annotators were paid, so this is an upper bound on casual patience.
+4. CC BY 4.0: the README cites Deng et al., Mind2Web, NeurIPS 2023.
+
+**Labelling is unchanged and still correct.** `report()` prints `ruler:
+PROVISIONAL` only when `Ruler.measured` is false, as does `summarize()`;
+the viewer tags a percentile unless both `run.json` and the loaded ruler say
+measured. A test pins the report both ways. `provisional()` still works, is
+still labelled, and now says `n=0` (it models a published mean; no tasks were
+measured) and "2,350-task" only for the dataset the mean came from.
+
 ### D-030 — The viewer is a step player over clean screenshots; marks come from the JSON
 **Date:** 2026-11-10 · **Status:** active
 The user decided on an in-house player instead of video. `viewer.build(DIR)` (also
@@ -1156,7 +1210,7 @@ pursuit and says nothing directly about abandonment — the quit threshold is a
 modelling choice and every report must label it as one.
 
 ### D-001 — The ruler is modelled, not measured
-**Date:** 2026-08-27 · **Status:** open — fix is M5
+**Date:** 2026-08-27 · **Status:** superseded by D-031
 `data/effort_ruler.json` uses the published Mind2Web mean (7.3 actions) with a
 log-normal spread, σ = 0.55 assumed because task-effort distributions are
 right-skewed and bounded below at 1.
@@ -1192,8 +1246,8 @@ kept.
 
 Still outstanding:
 
-- **The ruler is modelled, not measured** (D-001). Fix is M5. Within-instrument
-  comparisons are unaffected; absolute percentiles are not trustworthy.
+- **The ruler** was modelled (D-001); it is now measured on the Mind2Web train
+  split (D-031). Measurements M-001 to M-008 and M-010 predate it.
 - **Rule 1 is not enforced** (D-008). Nothing rejects a goal that shares a
   content word with the target's own label, so it is still possible to run a
   string-matching benchmark by accident. M4.

@@ -242,3 +242,20 @@ def test_a_zero_action_find_still_reports_a_median(ruler):
     s = summarize(outs, ruler)
     assert s["median_actions_to_find"] == 0.0
     assert s["human_percentile_of_median"] is not None
+
+
+def test_reports_say_provisional_only_for_an_unmeasured_ruler():
+    """A measured ruler must not be labelled provisional, nor the reverse (D-031)."""
+    from humanbrowser.budget import Outcome
+    from humanbrowser.ruler import Ruler, provisional
+    from humanbrowser.run import Gate, Trace, report
+
+    outs = [Outcome(True, 4, 4.0, 10.0, 1.0, 0.5, "found"),
+            Outcome(False, 9, 10.0, 10.0, 1.0, 0.1, "quit")]
+    trs = [Trace(exit_url="/a"), Trace(exit_url="/b")]
+    counts = sorted([2, 3, 4, 5, 6, 7, 9, 12, 14, 20])
+    measured = Ruler(counts=counts, quantiles={}, mean=8.2, n=10, provenance="t", measured=True)
+    assert "PROVISIONAL" not in report(outs, trs, measured, Gate())
+    assert "ruler                PROVISIONAL" in report(outs, trs, provisional(), Gate())
+    assert summarize(outs, measured)["ruler_measured"] is True
+    assert summarize(outs, provisional())["ruler_measured"] is False
